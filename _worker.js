@@ -1,5 +1,5 @@
 /**
- * Proxy Universal "En Caliente" (Optimizado para Navegador y listas M3U)
+ * Proxy Universal "En Caliente" con Parche HTML
  */
 export default {
   async fetch(request, env) {
@@ -35,21 +35,42 @@ export default {
       const modifiedHeaders = new Headers(request.headers);
       modifiedHeaders.delete("Referer");
 
-      // Hacemos la petición (seguimos redirecciones, muy importante para los .m3u)
+      // Hacemos la petición a la web original
       const proxyResponse = await fetch(parsedTarget, {
         method: "GET",
         headers: modifiedHeaders,
         redirect: "follow" 
       });
 
-      // Devolvemos el archivo blindando el navegador del usuario
-      return new Response(proxyResponse.body, {
-        status: proxyResponse.status,
-        headers: {
-          "Content-Type": proxyResponse.headers.get("Content-Type") || "text/plain",
-          "Access-Control-Allow-Origin": "*",
-          "Referrer-Policy": "no-referrer" // El parche anti-fugas de tu contraseña
-        }
+      // Miramos qué tipo de archivo nos ha devuelto
+      const contentType = proxyResponse.headers.get("Content-Type") || "";
+      let responseToReturn;
+
+      // EL PARCHE: Si es una página web, inyectamos la etiqueta <base>
+      if (contentType.includes("text/html")) {
+        responseToReturn = new HTMLRewriter()
+          .on("head", {
+            element(e) {
+              // Le decimos al navegador cuál es la ruta base real para las imágenes y estilos
+              e.prepend(`<base href="${parsedTarget.href}">`, { html: true });
+            }
+          })
+          .transform(proxyResponse);
+      } else {
+        // Si no es HTML (es un .m3u, un .zip, un .mp4...), lo dejamos tal cual
+        responseToReturn = proxyResponse;
+      }
+
+      // Preparamos las cabeceras finales de seguridad
+      const finalHeaders = new Headers(responseToReturn.headers);
+      finalHeaders.set("Access-Control-Allow-Origin", "*");
+      finalHeaders.set("Referrer-Policy", "no-referrer");
+
+      // Devolvemos el resultado final a tu navegador
+      return new Response(responseToReturn.body, {
+        status: responseToReturn.status,
+        statusText: responseToReturn.statusText,
+        headers: finalHeaders
       });
 
     } catch (error) {
